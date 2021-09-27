@@ -22,10 +22,10 @@
 var run = async function () {
 
   //Version 5.0.8
-  var version="5.0.8";
-  var versionCodename="Engelmann";
+  var version = "5.0.8";
+  var versionCodename = "Engelmann";
 
-  console.log("Stating Member Server v"+version+" ("+versionCodename+")");
+  console.log("Stating Member Server v" + version + " (" + versionCodename + ")");
 
   {//App includes
     try {
@@ -98,8 +98,7 @@ var run = async function () {
 
     if (usesqlite) {
       var sqlite = require('sqlite-async');
-    }
-    else {
+    } else {
       var mysql = require('mysql');
       var util = require('util'); //for promisify
     }
@@ -306,7 +305,7 @@ var run = async function () {
     }
 
     //Block with first memo transaction
-    currentBlock = 525471;
+    currentBlock = 13615251;
 
     //var result = await dbbc.get("SELECT * FROM status WHERE name='lastblockprocessed';");
     var result = await dbpoolapp.runQuery("SELECT * FROM status WHERE name='lastblockprocessed';");
@@ -329,9 +328,6 @@ var run = async function () {
       //Use only if there are a lot more blocks to process
       //await dbbc.run("PRAGMA JOURNAL_MODE = MEMORY");
       await dbpoolapp.runQuery("PRAGMA JOURNAL_MODE = MEMORY");
-
-
-
     }
 
     lastBlockSuccessfullyProcessed = currentBlock - 1;
@@ -569,7 +565,7 @@ var run = async function () {
   //General SQL
 
   function fetchAndProcessBlocksIntoDB() {
-    rpc.getBlockHash(currentBlock, processBlockHashIntoDB);
+    rpc.getBlock(currentBlock, true, processBlockHashIntoDB);
   }
 
   function processBlockHashIntoDB(err, ret) {
@@ -601,23 +597,26 @@ var run = async function () {
     }
     console.log("Processing Block Into SQL:" + currentBlock);
     //console.log("block hash:" + ret.result);
-    rpc.getBlock(ret.result, false, function (err, ret) { processBlockIntoDB(err, ret, currentBlock) });
-  }
 
-  function processBlockIntoDB(err, ret, blocknumber) {
-    if (err) {
-      console.log(err);
-      if (err.code == -1) {//Pruned block?
-        currentBlock++;
-      }
-      console.log("Wait " + secondsToWaitBetweenProcessingBlocks + " seconds");
-      return setTimeout(fetchAndProcessBlocksIntoDB, secondsToWaitBetweenErrorOnBlocks * 1000);
+    if (ret == null) {
+      // 
+      console.log("Processing Block Done!");
+      return setTimeout(fetchAndProcessBlocksIntoDB, secondsToWaitBetweenPollingNextBlock * 1000);
     }
-    takeBlockHexTransactionsAndPutThemInTheDB(ret.result, blocknumber);
+
+    if (ret.transactions.length > 0) {
+      takeBlockHexTransactionsAndPutThemInTheDB(ret, currentBlock);
+    } else {
+      if (!mempoolprocessingstarted) {
+        currentBlock++;
+
+        // process next block
+        setTimeout(fetchAndProcessBlocksIntoDB, secondsToWaitBetweenProcessingBlocks * 1000);
+      }
+    }
   }
 
-  function takeBlockHexTransactionsAndPutThemInTheDB(hex, blocknumber) {
-    var block = bitcoinJs.Block.fromHex(hex);
+  function takeBlockHexTransactionsAndPutThemInTheDB(block, blocknumber) {
     //console.log(block.getId() + "\n");
     var transactions = block.transactions;
     lastblocktimestamp = block.timestamp;
@@ -641,23 +640,23 @@ var run = async function () {
       }
 
       //This assumes maximum of 1 memo action per trx
-      var txid = tx.getId();
+      var txid = tx.hash;
 
       var sql = [];
 
       //write the raw trx to db for future use if the tx exists in a block
       if (blocknumber > 0) {
-        for (var i = 0; i < tx.outs.length; i++) {
-          var hex = tx.outs[i].script.toString('hex');
-          if (hex.startsWith("6a02") || hex.startsWith("6a04534c500001010747454e45534953")) {
-            var txhex = tx.toHex();
-            if (txhex.length > 0 && txhex.length < 51200) {
-              if (!hex.substr(0, 8).startsWith("6a026d3")) { //Ignore token actions
-                sql.push(insertignore + " into transactions VALUES (" + escapeFunction(txid) + "," + escapeFunction(hex.substr(0, 8)) + "," + escapeFunction(txhex) + "," + escapeFunction(time) + "," + escapeFunction(blocknumber) + ");");
-              }
+        // for (var i = 0; i < tx.outs.length; i++) {
+        var hex = tx.input;
+        if (hex.startsWith("6a02") || hex.startsWith("6a04534c500001010747454e45534953")) {
+          var txhex = tx.toHex();
+          if (txhex.length > 0 && txhex.length < 51200) {
+            if (!hex.substr(0, 8).startsWith("6a026d3")) { //Ignore token actions
+              sql.push(insertignore + " into transactions VALUES (" + escapeFunction(txid) + "," + escapeFunction(hex.substr(0, 8)) + "," + escapeFunction(txhex) + "," + escapeFunction(time) + "," + escapeFunction(blocknumber) + ");");
             }
           }
         }
+        // }
       }
 
       //Don't examine all transactions again that have already been examined for memo trxs
@@ -947,7 +946,7 @@ var run = async function () {
                   }
                   for (var i = 0; i < theUTXOs.length; i++) {
                     try {
-                      if(theUTXOs[i].satoshis==546)continue;//don't want SLP trxs
+                      if (theUTXOs[i].satoshis == 546) continue;//don't want SLP trxs
                       rpc.getRawTransaction(theUTXOs[i].txid, function (err, ret) {
                         var raw = ret.result;
                         try {
@@ -1126,7 +1125,7 @@ var run = async function () {
     }
 
     async function runQuery(processingFunction, res, msc, query, type) {
-      
+
       //if(record is in the cache)
       //return the cached record
       //else
@@ -1557,10 +1556,10 @@ var run = async function () {
     //write last push
   }
 
-  if (tokenbalanceserver) {
-    richlist.updateDB(dbpoolapp, onConflictAddress, escapeFunction, tokenbalanceserver);
-    setTimeout(function () { richlist.updateDB(dbpoolapp, onConflictAddress, escapeFunction, tokenbalanceserver); }, tokenbalanceupdateinterval);
-  }
+  // if (tokenbalanceserver) {
+  //   richlist.updateDB(dbpoolapp, onConflictAddress, escapeFunction, tokenbalanceserver);
+  //   setTimeout(function () { richlist.updateDB(dbpoolapp, onConflictAddress, escapeFunction, tokenbalanceserver); }, tokenbalanceupdateinterval);
+  // }
 
   //Utility functions
   function sanitizeAlphanumeric(input) {
@@ -1596,8 +1595,3 @@ var run = async function () {
 };
 
 run();
-
-
-
-
-

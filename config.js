@@ -16,6 +16,7 @@ config.rpcconfig = {
   pass: process.env.BCH_NODE_PASSWORD || 'password',
   host: process.env.BCH_NODE_HOST || '127.0.0.1',
   port: process.env.BCH_NODE_PORT || '8334',
+  provider: "HTTP://127.0.0.1:7545",
 };
 
 config.acceptmaxtrxsize = 51200; // 50K (allowing for numerous inputs, in the case of a big tip)
